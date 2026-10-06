@@ -1,0 +1,24 @@
+{
+  "name": "delivery-tracker-backend",
+  "version": "1.0.0",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.5.0",
+    "redis": "^6.3.0",
+    "socket.io": "^4.8.4",
+    "helmet": "^7.1.0", 
+    "express-rate-limit": "^7.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}

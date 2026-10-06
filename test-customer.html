@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head><title>Customer Test</title></head>
+<body>
+  <h2>Customer Test Client</h2>
+  <input id="token" placeholder="Paste customer JWT token" style="width:500px"><br><br>
+  <input id="orderId" placeholder="Order ID"><br><br>
+  <button onclick="connect()">Connect</button>
+  <button onclick="join()">Join Delivery (start tracking)</button>
+  <pre id="log"></pre>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script>
+    let socket;
+    const log = (msg) => document.getElementById("log").textContent += msg + "\n";
+
+    function connect() {
+      const token = document.getElementById("token").value;
+      socket = io("http://localhost:5000", { auth: { token } });
+      socket.on("connect", () => log("Connected: " + socket.id));
+      socket.on("error", (err) => log("Error: " + JSON.stringify(err)));
+      socket.on("connect_error", (err) => log("Connect error: " + err.message));
+
+      // This is the real payoff — live location updates, no refresh needed.
+      socket.on("location:update", (data) => {
+        log(`Rider location: ${data.latitude}, ${data.longitude} at ${new Date(data.timestamp).toLocaleTimeString()}`);
+      });
+    }
+
+    function join() {
+      const orderId = document.getElementById("orderId").value;
+      socket.emit("rider:join-delivery", { orderId });
+      log("Sent join request for order " + orderId);
+    }
+  </script>
+</body>
+</html>
