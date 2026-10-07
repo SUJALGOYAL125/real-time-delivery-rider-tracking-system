@@ -1,0 +1,138 @@
+# Real-Time Delivery & Rider Tracking System
+
+A full-stack delivery platform where customers create orders, nearby riders get matched automatically, and the customer watches the rider move on a live map in real time — no page refresh needed.
+
+## What it does
+
+- **Customers** create delivery orders and track their rider live on a map.
+- **Riders** go online, get matched to nearby orders, and share their live GPS location.
+- **Admins** (role exists, basic support) can oversee the system.
+
+The three things that make this interesting under the hood:
+1. **Finding nearby riders** using real geospatial queries (not just looping through a list and checking distance manually).
+2. **Live location tracking** using WebSockets (Socket.IO), so the customer's map updates instantly as the rider moves.
+3. **Scaling to multiple servers** — the system is built so it can run on more than one backend server at once, using Redis to keep everything in sync.
+
+## Tech Stack
+
+**Frontend:** React, Leaflet (for maps), OpenStreetMap, Axios, Socket.IO client
+**Backend:** Node.js, Express, Socket.IO, JWT (authentication), bcrypt (password hashing)
+**Database:** MongoDB (with geospatial queries), Redis (for live location + scaling)
+**Deployment:** Docker, Docker Compose, NGINX (as a load balancer)
+
+## How it works (the simple version)
+
+1. A customer creates an order with a pickup and delivery location.
+2. The system looks in MongoDB for available riders near the pickup point.
+3. A rider accepts the order — this happens safely even if two riders try to accept at the exact same moment (more on that below).
+4. The rider's phone/browser sends their GPS location every few seconds through a WebSocket connection.
+5. The customer's browser receives that location instantly and moves a marker on the map — live, no refreshing.
+6. Redis keeps the rider's most recent location cached, so even a customer who joins late sees where the rider currently is.
+
+## Why some of these choices were made
+
+**Why MongoDB's geospatial search instead of just looping through riders and calculating distance manually?**
+MongoDB has a built-in feature (a `2dsphere` index) specifically designed for "find things near this point" queries. It's faster and more reliable than writing that logic by hand.
+
+**Why Redis, on top of MongoDB?**
+MongoDB is great for permanent data (orders, users). But GPS updates come in every 1-2 seconds — writing every single one straight to MongoDB would be wasteful and slow. Redis holds the *latest* location in memory (fast), and only a snapshot gets saved to MongoDB every 15 seconds for permanent history.
+
+**Why does accepting an order need to be "atomic"?**
+Imagine two riders both tap "Accept" on the same order within the same second. Without special handling, both requests could succeed, and the order ends up assigned to two riders at once — a real bug. The fix: the database update itself includes a condition ("only accept if the order is still waiting for a rider"), so the database guarantees only one of those two requests can possibly succeed. This was tested directly — firing two accept requests at the exact same instant — and confirmed only one goes through, every time.
+
+**Why would this need to run on multiple servers?**
+If this app had thousands of riders and customers, one server wouldn't be able to handle all the live WebSocket connections alone. The fix is running multiple copies of the backend behind a load balancer. The tricky part: if a rider is connected to Server A and the customer tracking them is connected to Server B, how does Server B find out about the rider's update? The answer is Redis again — this time using a feature called **pub/sub**, where Server A "publishes" the update and Server B "subscribes" to hear about it. This was tested directly by running two separate backend servers and confirming a location update sent to one correctly reached a customer connected to the other.
+
+## Project Structure
+
+```
+├── app.js                  # Main backend entry point
+├── config/
+│   ├── db.js                # MongoDB connection
+│   ├── redis.js              # Redis connection
+│   └── socket.js             # All real-time (Socket.IO) logic
+├── models/
+│   ├── User.js                # Customers, riders, admins
+│   ├── Order.js                # Delivery orders
+│   ├── Rider.js                 # Rider availability + location
+│   └── LocationHistory.js        # Permanent location snapshots
+├── controllers/
+│   ├── authController.js          # Register / login
+│   ├── orderController.js          # Create / view orders
+│   └── riderController.js           # Availability, nearby search, accept order
+├── routes/                            # API route definitions
+├── frontend/                           # React app (login, tracking map, rider dashboard)
+├── nginx.conf                           # Load balancer config
+├── docker-compose.yml                    # Runs everything together locally
+└── test-*.js / test-*.html                # Manual test scripts and pages
+```
+
+## Running it locally
+
+**Option 1 — with Docker (recommended, runs everything at once):**
+```bash
+docker-compose up --build
+```
+This starts two backend instances, MongoDB, Redis, and an NGINX load balancer. The app is reachable at `http://localhost:8080`.
+
+**Option 2 — running pieces separately (for development):**
+```bash
+# Backend
+npm install
+npm run dev
+
+# Frontend (in a separate terminal)
+cd frontend
+npm install
+npm run dev
+```
+
+**Environment variables needed** (create a `.env` file):
+```
+MONGO_URI=your_mongodb_connection_string
+REDIS_URL=your_redis_connection_string
+JWT_SECRET=choose_a_long_random_string
+FRONTEND_URL=http://localhost:5173
+PORT=5000
+```
+
+## API Overview
+
+| What | Endpoint |
+|---|---|
+| Register | `POST /api/auth/register` |
+| Login | `POST /api/auth/login` |
+| Create an order | `POST /api/orders` |
+| View my orders | `GET /api/orders` |
+| View one order | `GET /api/orders/:id` |
+| Set rider availability + location | `PATCH /api/riders/availability` |
+| Find nearby riders | `GET /api/riders/nearby` |
+| Accept an order | `POST /api/riders/orders/:orderId/accept` |
+
+**Real-time events (Socket.IO):**
+- `rider:join-delivery` — join a specific delivery's live updates
+- `rider:location` — rider sends a GPS update
+- `location:update` — customer receives the rider's new position
+
+## What's been tested
+
+- ✅ Full order flow: create → find nearby riders → accept → live tracking
+- ✅ Two riders racing to accept the same order at the exact same instant — confirmed only one ever succeeds
+- ✅ Invalid location data (out-of-range coordinates, wrong data types) correctly rejected
+- ✅ Location updates syncing correctly across two separate backend server instances via Redis
+- ✅ Load balancer (NGINX) correctly keeping a client's connection on the same backend instance
+
+## Known limitations (being upfront about what's not fully built)
+
+- **The frontend is intentionally minimal.** It's enough to demonstrate the real-time tracking working end-to-end, but it's missing some normal app features like an order list page, or a way for riders to browse available orders without knowing the order ID already. The focus of this project was the backend architecture — geospatial search, real-time sync, and scaling — not building a polished consumer app.
+- **No payments, ratings, or order cancellation flow yet.**
+- **GPS spoofing isn't checked** — the system validates that coordinates are *structurally* valid (real numbers, in range), but doesn't detect a rider's location jumping impossibly far in a short time.
+- **The live GCP deployment wasn't completed** — the app was fully built, tested, and run via Docker Compose locally (including the multi-server + load balancer setup), but wasn't pushed to a live cloud environment, given time constraints.
+
+## Possible future improvements
+
+- Order list / browse pages for a more complete frontend experience
+- Route-based ETA calculation (currently just straight-line distance for "nearby" search)
+- Push notifications for when the app is in the background
+- Payments and ratings
+- Full production deployment to GCP with managed MongoDB/Redis

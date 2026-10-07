@@ -23,7 +23,7 @@ export default function CustomerTracking() {
   // Connect to Socket.IO and start listening for live location updates.
   useEffect(() => {
     const token = localStorage.getItem("token");
-    const socket = io("http://localhost:5000", { auth: { token } });
+    const socket = io("http://localhost:8080", { auth: { token } });
     socketRef.current = socket;
 
     socket.on("connect", () => {

@@ -19,7 +19,7 @@
 
     function connect() {
       const token = document.getElementById("token").value;
-      socket = io("http://localhost:5000", { auth: { token } });
+      socket = io("http://localhost:8080", { auth: { token } });
       socket.on("connect", () => log("Connected: " + socket.id));
       socket.on("error", (err) => log("Error: " + JSON.stringify(err)));
       socket.on("connect_error", (err) => log("Connect error: " + err.message));

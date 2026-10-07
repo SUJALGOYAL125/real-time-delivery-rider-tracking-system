@@ -1,4 +1,5 @@
 const { Server } = require("socket.io");
+const { createAdapter } = require("@socket.io/redis-adapter");
 const jwt = require("jsonwebtoken");
 const Order = require("../models/Order");
 const LocationHistory = require("../models/LocationHistory");
@@ -9,14 +10,25 @@ let io;
 const lastFlushTime = {};
 const FLUSH_INTERVAL_MS = 15000;
 
-// NEW: track the last time each rider sent a location update.
 const lastLocationUpdate = {};
-const MIN_UPDATE_INTERVAL_MS = 1000; // don't accept more than 1 update/second per rider
+const MIN_UPDATE_INTERVAL_MS = 1000;
 
-function initSocket(httpServer) {
+async function initSocket(httpServer) {
   io = new Server(httpServer, {
     cors: { origin: process.env.FRONTEND_URL || "http://localhost:5173" },
   });
+
+  // The Redis adapter needs its OWN two dedicated connections —
+  // one purely for publishing events, one purely for subscribing.
+  // A Redis connection used for subscribing can't also run normal
+  // commands, so these must be separate from the main redisClient
+  // used elsewhere for GET/SET location caching.
+  const pubClient = redisClient.duplicate();
+  const subClient = redisClient.duplicate();
+  await Promise.all([pubClient.connect(), subClient.connect()]);
+
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log("Socket.IO Redis adapter connected — ready for multi-server sync");
 
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
@@ -46,6 +58,7 @@ function initSocket(httpServer) {
 
       socket.join(`delivery:${orderId}`);
       socket.currentOrderId = orderId;
+      console.log(`${socket.user.role} ${socket.user.userId} joined delivery:${orderId}`);
 
       if (isCustomer) {
         const cached = await redisClient.get(`rider:${order.riderId}:location`);
@@ -69,9 +82,6 @@ function initSocket(httpServer) {
         return socket.emit("error", { error: "Coordinates out of range" });
       }
 
-      // NEW: rate limit — silently drop updates that come in too fast.
-      // No error sent back, since this is an expected, routine throttle,
-      // not a client mistake worth alarming the rider about.
       const now = Date.now();
       const lastUpdate = lastLocationUpdate[socket.user.userId] || 0;
       if (now - lastUpdate < MIN_UPDATE_INTERVAL_MS) {
@@ -87,6 +97,9 @@ function initSocket(httpServer) {
         { EX: 60 }
       );
 
+      // This single line now automatically works across multiple
+      // server instances too, thanks to the adapter set up above —
+      // no other code here needed to change.
       socket.to(`delivery:${orderId}`).emit("location:update", locationPayload);
 
       if (!lastFlushTime[orderId] || now - lastFlushTime[orderId] >= FLUSH_INTERVAL_MS) {
@@ -97,8 +110,6 @@ function initSocket(httpServer) {
 
     socket.on("disconnect", () => {
       console.log(`Socket disconnected: ${socket.id}`);
-      // Clean up this rider's rate-limit entry to avoid an ever-growing object
-      // (minor, but matters at scale with many riders connecting/disconnecting).
       delete lastLocationUpdate[socket.user.userId];
     });
   });

@@ -10,7 +10,7 @@ export default function RiderDashboard() {
 
   useEffect(() => {
     const token = localStorage.getItem("token");
-    const socket = io("http://localhost:5000", { auth: { token } });
+    const socket = io("http://localhost:8080", { auth: { token } });
     socketRef.current = socket;
     return () => socket.disconnect();
   }, []);
