@@ -1,5 +1,6 @@
 const Rider = require("../models/Rider");
 const Order = require("../models/Order");
+const { getIO } = require("../config/socket");
 
 // Called once when a rider account is set up, or lazily on first use.
 exports.setupRiderProfile = async (req, res) => {
@@ -94,5 +95,52 @@ exports.acceptOrder = async (req, res) => {
     res.json({ order });
   } catch (err) {
     res.status(500).json({ error: "Failed to accept order", details: err.message });
+  }
+};
+
+
+// Maps each status to the status that must come right before it.
+// This enforces the order: ASSIGNED -> PICKED_UP -> OUT_FOR_DELIVERY -> DELIVERED
+const PREVIOUS_STATUS = {
+  RIDER_PICKED_UP: "RIDER_ASSIGNED",
+  OUT_FOR_DELIVERY: "RIDER_PICKED_UP",
+  DELIVERED: "OUT_FOR_DELIVERY",
+};
+
+exports.updateOrderStatus = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { status } = req.body;
+
+    const requiredPrevious = PREVIOUS_STATUS[status];
+    if (!requiredPrevious) {
+      return res.status(400).json({ error: "Invalid status" });
+    }
+
+    // Same atomic pattern as acceptOrder: the conditions (this rider owns
+    // the order, and it's in the expected previous status) are part of the
+    // update itself, so skipping steps or editing someone else's order
+    // simply matches nothing.
+    const order = await Order.findOneAndUpdate(
+      { _id: orderId, riderId: req.user.userId, status: requiredPrevious },
+      { status },
+      { new: true }
+    );
+
+    if (!order) {
+      return res.status(409).json({ error: "Invalid status transition, or not your order" });
+    }
+
+    // Delivery finished: free the rider up for new orders.
+    if (status === "DELIVERED") {
+      await Rider.findOneAndUpdate({ userId: req.user.userId }, { isAvailable: true });
+    }
+
+    // Push the new status to everyone in this delivery's room (the customer).
+    getIO().to(`delivery:${orderId}`).emit("delivery:status", { status });
+
+    res.json({ order });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update status", details: err.message });
   }
 };

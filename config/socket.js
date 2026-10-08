@@ -18,11 +18,8 @@ async function initSocket(httpServer) {
     cors: { origin: process.env.FRONTEND_URL || "http://localhost:5173" },
   });
 
-  // The Redis adapter needs its OWN two dedicated connections —
-  // one purely for publishing events, one purely for subscribing.
-  // A Redis connection used for subscribing can't also run normal
-  // commands, so these must be separate from the main redisClient
-  // used elsewhere for GET/SET location caching.
+  // The Redis adapter needs its own two dedicated connections:
+  // one for publishing, one for subscribing.
   const pubClient = redisClient.duplicate();
   const subClient = redisClient.duplicate();
   await Promise.all([pubClient.connect(), subClient.connect()]);
@@ -44,6 +41,12 @@ async function initSocket(httpServer) {
 
   io.on("connection", (socket) => {
     console.log(`Socket connected: ${socket.id} (user ${socket.user.userId}, role ${socket.user.role})`);
+
+    // Every rider joins a personal room, so the server can message one
+    // specific rider without knowing which socket or server they're on.
+    if (socket.user.role === "rider") {
+      socket.join(`rider:${socket.user.userId}`);
+    }
 
     socket.on("rider:join-delivery", async ({ orderId }) => {
       const order = await Order.findById(orderId);
@@ -97,9 +100,6 @@ async function initSocket(httpServer) {
         { EX: 60 }
       );
 
-      // This single line now automatically works across multiple
-      // server instances too, thanks to the adapter set up above —
-      // no other code here needed to change.
       socket.to(`delivery:${orderId}`).emit("location:update", locationPayload);
 
       if (!lastFlushTime[orderId] || now - lastFlushTime[orderId] >= FLUSH_INTERVAL_MS) {

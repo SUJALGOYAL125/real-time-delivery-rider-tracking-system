@@ -8,5 +8,6 @@ router.post("/setup", authenticate, authorize("rider"), riderController.setupRid
 router.patch("/availability", authenticate, authorize("rider"), riderController.updateAvailability);
 router.get("/nearby", authenticate, riderController.findNearbyRiders);
 router.post("/orders/:orderId/accept", authenticate, authorize("rider"), riderController.acceptOrder);
+router.patch("/orders/:orderId/status", authenticate, authorize("rider"), riderController.updateOrderStatus);
 
 module.exports = router;

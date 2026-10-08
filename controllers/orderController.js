@@ -1,4 +1,6 @@
 const Order = require("../models/Order");
+const Rider = require("../models/Rider");
+const { getIO } = require("../config/socket");
 
 exports.createOrder = async (req, res) => {
   try {
@@ -25,9 +27,34 @@ exports.createOrder = async (req, res) => {
 
     await order.save();
 
-    // Next phase will trigger nearby-rider search here.
     order.status = "SEARCHING_RIDER";
     await order.save();
+
+    // Notify nearby available riders. Wrapped in its own try/catch so a
+    // notification failure never makes a successfully-saved order look failed.
+    try {
+      const nearbyRiders = await Rider.find({
+        isAvailable: true,
+        isOnline: true,
+        currentLocation: {
+          $near: {
+            $geometry: { type: "Point", coordinates: pickupLocation.coordinates },
+            $maxDistance: 5000,
+          },
+        },
+      });
+
+      const io = getIO();
+      nearbyRiders.forEach((rider) => {
+        io.to(`rider:${rider.userId}`).emit("delivery:new", {
+          orderId: order._id,
+          pickupLocation: order.pickupLocation,
+          deliveryLocation: order.deliveryLocation,
+        });
+      });
+    } catch (err) {
+      console.error("Failed to notify riders:", err.message);
+    }
 
     res.status(201).json({ order });
   } catch (err) {
@@ -51,8 +78,7 @@ exports.getOrderById = async (req, res) => {
       return res.status(404).json({ error: "Order not found" });
     }
 
-    // Ownership check — a customer can only view their own order.
-    // (Rider/admin access handled separately once those roles need it.)
+    // Ownership check: a customer can only view their own order.
     if (order.customerId.toString() !== req.user.userId) {
       return res.status(403).json({ error: "Not authorized to view this order" });
     }

@@ -25,6 +25,7 @@
       socket.on("location:update", (data) => {
         log(`Rider location: ${data.latitude}, ${data.longitude} at ${new Date(data.timestamp).toLocaleTimeString()}`);
       });
+      socket.on("delivery:status", (data) => log("STATUS: " + data.status));
     }
 
     function join() {

@@ -23,6 +23,9 @@
       socket.on("connect", () => log("Connected: " + socket.id));
       socket.on("error", (err) => log("Error: " + JSON.stringify(err)));
       socket.on("connect_error", (err) => log("Connect error: " + err.message));
+
+      // NEW: listen for new delivery requests pushed by the server
+      socket.on("delivery:new", (data) => log("NEW DELIVERY REQUEST: " + JSON.stringify(data)));
     }
 
     function join() {

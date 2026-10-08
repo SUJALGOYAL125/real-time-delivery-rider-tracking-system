@@ -23,11 +23,12 @@ The three things that make this interesting under the hood:
 ## How it works (the simple version)
 
 1. A customer creates an order with a pickup and delivery location.
-2. The system looks in MongoDB for available riders near the pickup point.
+2. The system looks in MongoDB for available riders near the pickup point and instantly pushes the request to each of them over a WebSocket.
 3. A rider accepts the order — this happens safely even if two riders try to accept at the exact same moment (more on that below).
 4. The rider's phone/browser sends their GPS location every few seconds through a WebSocket connection.
 5. The customer's browser receives that location instantly and moves a marker on the map — live, no refreshing.
 6. Redis keeps the rider's most recent location cached, so even a customer who joins late sees where the rider currently is.
+7. The rider moves the order through its stages (picked up → out for delivery → delivered), and the customer sees each status change live. The backend only allows each stage to follow the one before it, and finishing a delivery frees the rider up for the next one.
 
 ## Why some of these choices were made
 
@@ -108,15 +109,20 @@ PORT=5000
 | Set rider availability + location | `PATCH /api/riders/availability` |
 | Find nearby riders | `GET /api/riders/nearby` |
 | Accept an order | `POST /api/riders/orders/:orderId/accept` |
+| Update delivery status | `PATCH /api/riders/orders/:orderId/status` |
 
 **Real-time events (Socket.IO):**
 - `rider:join-delivery` — join a specific delivery's live updates
 - `rider:location` — rider sends a GPS update
 - `location:update` — customer receives the rider's new position
+- `delivery:new` — a nearby rider is told a new order is waiting
+- `delivery:status` — the customer is told the order moved to its next stage
 
 ## What's been tested
 
-- ✅ Full order flow: create → find nearby riders → accept → live tracking
+- ✅ Full order flow through the actual UI: create order → nearby riders notified instantly → rider accepts → live tracking on the map → picked up → out for delivery → delivered
+- ✅ Status moves forward through each stage (picked up → out for delivery → delivered), and the customer sees each change live
+- ⏳ Not yet tested: that skipping a stage (e.g. jumping straight to "delivered") is rejected. The backend only allows each stage to follow the previous one, but I haven't explicitly run the rejected case yet.
 - ✅ Two riders racing to accept the same order at the exact same instant — confirmed only one ever succeeds
 - ✅ Invalid location data (out-of-range coordinates, wrong data types) correctly rejected
 - ✅ Location updates syncing correctly across two separate backend server instances via Redis
@@ -124,7 +130,9 @@ PORT=5000
 
 ## Known limitations (being upfront about what's not fully built)
 
-- **The frontend is intentionally minimal.** It's enough to demonstrate the real-time tracking working end-to-end, but it's missing some normal app features like an order list page, or a way for riders to browse available orders without knowing the order ID already. The focus of this project was the backend architecture — geospatial search, real-time sync, and scaling — not building a polished consumer app.
+- **The frontend is intentionally minimal.** Customers can create an order and track it live, and riders see incoming requests, accept them, and step through the delivery stages. But there's no order history page for customers, and the map only shows the pickup point and the rider (not a separate delivery marker). The focus of this project was the backend architecture — geospatial search, real-time sync, and scaling — not building a polished consumer app.
+- **A rider's active delivery lives only in the browser page.** If the rider refreshes the dashboard mid-delivery, the page forgets it (the order itself stays assigned in the database). A "my active deliveries" endpoint would fix this.
+- **No admin features.** The admin role exists in the user model, but no admin pages or endpoints were built.
 - **No payments, ratings, or order cancellation flow yet.**
 - **GPS spoofing isn't checked** — the system validates that coordinates are *structurally* valid (real numbers, in range), but doesn't detect a rider's location jumping impossibly far in a short time.
 - **The live GCP deployment wasn't completed** — the app was fully built, tested, and run via Docker Compose locally (including the multi-server + load balancer setup), but wasn't pushed to a live cloud environment, given time constraints.
